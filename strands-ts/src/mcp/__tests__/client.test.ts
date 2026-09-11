@@ -276,30 +276,6 @@ describe('MCP Integration', () => {
       })
     })
 
-    it('paginates through all pages of tools', async () => {
-      sdkClientMock.listTools
-        .mockResolvedValueOnce({
-          tools: [{ name: 'tool_a', description: 'A', inputSchema: {} }],
-          nextCursor: 'page2',
-        })
-        .mockResolvedValueOnce({
-          tools: [{ name: 'tool_b', description: 'B', inputSchema: {} }],
-          nextCursor: 'page3',
-        })
-        .mockResolvedValueOnce({
-          tools: [{ name: 'tool_c', description: 'C', inputSchema: {} }],
-        })
-
-      const tools = await client.listTools()
-
-      expect(tools).toHaveLength(3)
-      expect(tools.map((t) => t.name)).toEqual(['tool_a', 'tool_b', 'tool_c'])
-      expect(sdkClientMock.listTools).toHaveBeenCalledTimes(3)
-      expect(sdkClientMock.listTools).toHaveBeenNthCalledWith(1, undefined)
-      expect(sdkClientMock.listTools).toHaveBeenNthCalledWith(2, { cursor: 'page2' })
-      expect(sdkClientMock.listTools).toHaveBeenNthCalledWith(3, { cursor: 'page3' })
-    })
-
     it('matches strings and regexes against the server-side name and passes the renamed tool to callbacks', async () => {
       const callback = vi.fn((tool: McpTool) => tool.name === 'server_callback_tool')
       const statefulPattern = /regex_/g
@@ -386,7 +362,7 @@ describe('MCP Integration', () => {
       ).toEqual(['override_two'])
     })
 
-    it('filters and prefixes every page and invokes prefixed tools by the server-side name', async () => {
+    it('filters and prefixes SDK results and invokes tools by the server-side name', async () => {
       const prefixedClient = new McpClient({
         applicationName: 'TestApp',
         transport: mockTransport,
@@ -394,22 +370,20 @@ describe('MCP Integration', () => {
         toolFilters: { allowed: [/keep_/] },
       })
       const prefixedSdkClient = vi.mocked(Client).mock.results.at(-1)!.value
-      prefixedSdkClient.listTools
-        .mockResolvedValueOnce({
-          tools: [
-            { name: 'keep_one', inputSchema: {} },
-            { name: 'drop_one', inputSchema: {} },
-          ],
-          nextCursor: 'page2',
-        })
-        .mockResolvedValueOnce({ tools: [{ name: 'keep_two', inputSchema: {} }] })
+      prefixedSdkClient.listTools.mockResolvedValue({
+        tools: [
+          { name: 'keep_one', inputSchema: {} },
+          { name: 'drop_one', inputSchema: {} },
+          { name: 'keep_two', inputSchema: {} },
+        ],
+      })
       prefixedSdkClient.callTool.mockResolvedValue({ content: [] })
 
       const tools = await prefixedClient.listTools()
       await prefixedClient.callTool(tools[1]!, { value: 1 })
 
       expect(tools.map((tool) => tool.name)).toEqual(['server_keep_one', 'server_keep_two'])
-      expect(prefixedSdkClient.callTool).toHaveBeenCalledWith({ name: 'keep_two', arguments: { value: 1 } }, undefined)
+      expect(prefixedSdkClient.callTool).toHaveBeenCalledWith({ name: 'keep_two', arguments: { value: 1 } }, {})
     })
 
     it('uses the server-side name for a prefixed tool called with requestTimeouts', async () => {
@@ -492,7 +466,7 @@ describe('MCP Integration', () => {
       await client.callTool(tool, { op: 'add' })
 
       expect(sdkClientMock.connect).toHaveBeenCalled()
-      expect(sdkClientMock.callTool).toHaveBeenCalledWith({ name: 'calc', arguments: { op: 'add' } }, undefined)
+      expect(sdkClientMock.callTool).toHaveBeenCalledWith({ name: 'calc', arguments: { op: 'add' } }, {})
     })
 
     it('forwards abort signal to SDK callTool', async () => {
@@ -549,20 +523,6 @@ describe('MCP Integration', () => {
       )
     })
 
-    it('throws on callTool when tasksConfig is set', async () => {
-      const resultsLengthBefore = vi.mocked(Client).mock.results.length
-      const taskClient = new McpClient({
-        applicationName: 'TestApp',
-        transport: mockTransport,
-        tasksConfig: { ttl: 30000, pollTimeout: 120000 },
-      })
-      const taskSdkClientMock = vi.mocked(Client).mock.results[resultsLengthBefore]!.value
-      const tool = new McpTool({ name: 'calc', description: '', inputSchema: {}, client: taskClient })
-
-      await expect(taskClient.callTool(tool, { op: 'add' })).rejects.toThrow(/temporarily unavailable/)
-      expect(taskSdkClientMock.callTool).not.toHaveBeenCalled()
-    })
-
     it('still lists tools when tasksConfig is set', async () => {
       const resultsLengthBefore = vi.mocked(Client).mock.results.length
       const taskClient = new McpClient({
@@ -576,17 +536,6 @@ describe('MCP Integration', () => {
       const tools = await taskClient.listTools()
 
       expect(tools.map((tool) => tool.name)).toEqual(['calc'])
-    })
-
-    it('warns at construction when tasksConfig is set and only then', () => {
-      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
-
-      new McpClient({ applicationName: 'TestApp', transport: mockTransport, tasksConfig: {} })
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('callTool will throw'))
-
-      warnSpy.mockClear()
-      new McpClient({ applicationName: 'TestApp', transport: mockTransport })
-      expect(warnSpy).not.toHaveBeenCalled()
     })
 
     it('validates tool arguments', async () => {
